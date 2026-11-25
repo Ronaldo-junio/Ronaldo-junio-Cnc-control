@@ -1,0 +1,37 @@
+plugins { id 'com.android.application' }
+
+def runNumber = Integer.parseInt(System.getenv('GITHUB_RUN_NUMBER') ?: '1')
+
+android {
+    namespace 'com.cncrede'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'com.cncrede'
+        minSdk 24
+        targetSdk 34
+        versionCode runNumber
+        versionName "1.${runNumber}"
+    }
+    signingConfigs {
+        main {
+            storeFile file('cncrede.keystore')
+            storeType 'pkcs12'
+            storePassword 'cncrede123'
+            keyAlias 'cncrede'
+            keyPassword 'cncrede123'
+        }
+    }
+    buildTypes {
+        debug { signingConfig signingConfigs.main }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation 'com.github.mik3y:usb-serial-for-android:3.8.1'
+    implementation 'androidx.core:core:1.12.0'
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+}
