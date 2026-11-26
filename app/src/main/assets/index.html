@@ -33,6 +33,7 @@ h3:before{content:"";width:3px;height:12px;border-radius:2px;background:var(--c,
 .ok{background:linear-gradient(135deg,#16a34a,#2fd27f);border:0;color:#fff}
 .wa{background:linear-gradient(135deg,#f59e0b,#ffb020);border:0;color:#2a1c00}
 .er{background:linear-gradient(135deg,#dc2626,#ff5a5f);border:0;color:#fff}
+.mkc{display:none}body.mk .mkc{display:block}body.mk .gr{display:none}
 body.off .ctl{opacity:.55;filter:saturate(.55)}
 .ax{display:flex;align-items:center;gap:10px;background:var(--bg3);border-radius:10px;padding:7px 12px;margin-bottom:6px;transition:.3s}
 .ax i{font-style:normal;font-weight:800;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;color:#10131a;background:var(--c)}
@@ -73,7 +74,7 @@ body.off footer{background:#b36b00}body.run footer{background:#16a34a}body.alarm
 <div class="col">
   <div class="card"><h3>Conexão</h3>
     <div class="row"><select id="baud"><option>115200</option><option>250000</option><option>57600</option><option>9600</option></select>
-    <select id="fw"><option value="grbl">GRBL</option><option value="simple">Outro (linha a linha)</option></select>
+    <select id="fw"><option value="simple">Impressora 3D (Marlin / K9)</option><option value="grbl">CNC (GRBL)</option></select>
     <button class="btn pri" onclick="act('connect?baud='+$('baud').value+'&mode='+$('fw').value,'')">Conectar</button>
     <button class="btn" onclick="act('disconnect','')">Desconectar</button></div>
     <div id="msg" style="color:var(--mu);font-size:13px"></div></div>
@@ -92,16 +93,22 @@ body.off footer{background:#b36b00}body.run footer{background:#16a34a}body.alarm
     <div style="font-size:12px;color:var(--mu);margin-top:10px">Velocidade: <b id="fv">1000</b> mm/min</div>
     <input id="feed" type="range" min="50" max="3000" step="50" value="1000" oninput="$('fv').textContent=this.value">
     <div class="row">
-      <button class="btn pri" onclick="cmd('$H')">Home</button><button class="btn wa" onclick="cmd('$X')">Destravar</button>
-      <button class="btn ok" onclick="cmd('G92 X0 Y0 Z0')">Zerar peça</button><button class="btn" onclick="cmd('G90 G0 X0 Y0')">Ir p/ X0 Y0</button>
+      <button class="btn pri" onclick="cmd(mk?'G28':'$H')">Home</button><button class="btn wa" onclick="cmd(mk?'M999':'$X')">Destravar</button>
+      <button class="btn ok" onclick="cmd('G92 X0 Y0 Z0')">Zerar peça</button><button class="btn" onclick="cmd(mk?'G90\nG1 X0 Y0 F1500':'G90 G0 X0 Y0')">Ir p/ X0 Y0</button>
       <button class="btn" onclick="rt('hold')">Hold</button><button class="btn" onclick="rt('resume')">Continuar</button>
       <button class="btn er" onclick="reset()">Reset</button></div></div>
-  <div class="card ctl" style="--c:var(--er)"><h3>Spindle / Laser</h3>
+  <div class="card ctl gr" style="--c:var(--er)"><h3>Spindle / Laser</h3>
     <div style="font-size:12px;color:var(--mu)">Potência (S): <b id="sv">200</b></div>
     <input id="sp" type="range" min="0" max="1000" step="10" value="200" oninput="$('sv').textContent=this.value">
     <div class="row"><button class="btn ok" onclick="spOn('M3')">Ligar (M3)</button><button class="btn wa" onclick="spOn('M4')">M4</button><button class="btn er" onclick="cmd('M5')">Desligar (M5)</button></div>
     <div class="row"><select onchange="cmd(this.value)"><option>G54</option><option>G55</option><option>G56</option><option>G57</option><option>G58</option><option>G59</option></select>
       <button class="btn" onclick="cmd('$$')">Config ($$)</button><button class="btn" onclick="cmd('$#')">Offsets ($#)</button></div></div>
+  <div class="card ctl mkc" style="--c:var(--wa)"><h3>Impressora 3D</h3>
+    <div class="ax" style="--c:#ffb020"><i>T</i><span id="tp">—</span></div>
+    <div class="row"><input id="tt" type="number" min="0" max="250" value="200" style="width:90px"> °C
+      <button class="btn wa" onclick="heat()">Aquecer</button><button class="btn" onclick="cmd('M104 S0')">Desligar</button></div>
+    <div class="row"><button class="btn" onclick="cmd('M106 S255')">Ventoinha</button><button class="btn" onclick="cmd('M107')">Ventoinha off</button></div>
+    <div class="row"><button class="btn" onclick="ext(10)">Extrudar 10 mm</button><button class="btn" onclick="ext(-10)">Recolher 10 mm</button></div></div>
 </div>
 <div class="col">
   <div class="card ctl" style="--c:var(--wa)"><h3>Programa G-code</h3>
@@ -119,7 +126,7 @@ body.off footer{background:#b36b00}body.run footer{background:#16a34a}body.alarm
 <div id="dlg" hidden><div><p id="dm"></p><div class="row"><button class="btn" id="dn">Cancelar</button><button class="btn pri" id="dyes">Confirmar</button></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let pin=localStorage.getItem('cncpin')||'',since=0,on=false,step=10;
+let pin=localStorage.getItem('cncpin')||'',since=0,on=false,step=10,mk=false;
 const qp=new URLSearchParams(location.search).get('pin');
 if(qp){pin=qp;localStorage.setItem('cncpin',qp);history.replaceState(null,'','/');}
 $('fh').textContent=location.host;
@@ -132,12 +139,15 @@ async function api(p,b){
 function setPin(){pin=$('pin').value;localStorage.setItem('cncpin',pin);since=0;}
 function need(){if(on)return true;toast('CNC desconectada — conecte pelo cabo USB primeiro','er');return false;}
 async function act(p,b,chk){if(chk&&!need())return;try{const r=await api(p,b);if(r.error)toast(r.error,'er');else if(r.msg)toast(r.msg);}catch(e){}}
-const cmd=c=>act('cmd',c,1),rt=c=>act('rt?c='+c,'',1);
-function jog(a,d){cmd('$J=G91 G21 '+a+(d*step)+' F'+$('feed').value);}
+const cmd=c=>act('cmd',c,1);
+const rt=c=>mk?(c==='resume'?act('job/resume','',1):c==='hold'?act('job/pause','',1):act('job/stop','',1)):act('rt?c='+c,'',1);
+function jog(a,d){const f=$('feed').value;if(mk)cmd('G91\nG1 '+a+(d*step)+' F'+Math.min(f,a==='Z'?600:2400)+'\nG90');else cmd('$J=G91 G21 '+a+(d*step)+' F'+f);}
 $('seg').onclick=e=>{const s=e.target.dataset.s;if(!s)return;step=parseFloat(s);[...$('seg').children].forEach(b=>b.classList.toggle('a',b===e.target));};
 async function reset(){if(await ask('Enviar RESET (parada de emergência por software)?'))rt('reset');}
 async function start(){if(!need())return;const g=$('gcode').value;if(!g.trim())return toast('Sem G-code para executar','er');
   if(await ask('Iniciar execução? Confirme que a área da máquina está livre e que você está ao lado dela.'))act('job/start',g);}
+async function heat(){const t=Math.min(250,+$('tt').value||0);if(await ask('Aquecer o hotend a '+t+' °C? Fique ao lado da impressora.'))cmd('M104 S'+t);}
+function ext(mm){cmd('M83\nG1 E'+mm+' F150\nM82');}
 async function spOn(m){if(!need())return;if(await ask('Isso LIGA o spindle/laser. Área livre e proteção ocular?'))cmd(m+' S'+$('sp').value);}
 async function stopJob(){if(await ask('Parar a máquina?'))act('job/stop','',1);}
 function sendCmd(){const v=$('cmd').value.trim();if(v){cmd(v);$('cmd').value='';}}
@@ -148,7 +158,8 @@ function log(t){const d=document.createElement('div');d.textContent=t;d.classNam
 function render(s){
   on=s.connected;let st='Ocioso',m=[];
   if(s.status){const p=s.status.replace(/[<>]/g,'').split('|');st=p[0].split(':')[0];p.forEach(x=>{const k=x.split(':');if(/^[MW]Pos$/.test(k[0]))m=k[1].split(',');});}
-  document.body.className=(on?'on':'off')+(s.running?' run':'')+(/^Alarm/.test(st)?' alarm':'');
+  mk=!!s.marlin;document.body.className=(on?'on':'off')+(s.running?' run':'')+(/^Alarm/.test(st)?' alarm':'')+(mk?' mk':'');
+  $('tp').textContent=s.temp?s.temp+' °C':'—';
   ['dx','dy2','dz'].forEach((id,i)=>$(id).textContent=on&&m[i]!==undefined?(+m[i]).toFixed(3):'0.000');
   $('st').textContent=on?st+(s.running?' · executando':''):'Desconectada';
   $('msg').textContent=$('msg2').textContent=s.msg;

@@ -58,6 +58,8 @@ public class Server extends NanoHTTPD {
                     out.put("paused", link.isPaused());
                     out.put("line", link.getJobLine());
                     out.put("total", link.getJobTotal());
+                    out.put("marlin", !link.isGrbl());
+                    out.put("temp", link.getTemp());
                     out.put("next", next[0]);
                     out.put("log", new JSONArray(lines));
                     break;
@@ -77,7 +79,7 @@ public class Server extends NanoHTTPD {
                     if (link.isJobRunning()) return json(Response.Status.CONFLICT, new JSONObject().put("error", "Job em execução"));
                     String cmd = body.trim();
                     if (cmd.isEmpty()) return json(Response.Status.BAD_REQUEST, new JSONObject().put("error", "Comando vazio"));
-                    link.sendLine(cmd);
+                    for (String l : cmd.split("\\r?\\n")) if (!l.trim().isEmpty()) link.sendLine(l.trim());
                     break;
                 }
                 case "/api/rt": {

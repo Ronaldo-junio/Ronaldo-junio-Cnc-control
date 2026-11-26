@@ -69,7 +69,13 @@ public class SerialLink implements SerialInputOutputManager.Listener {
         else ctx.registerReceiver(rcv, f);
         // pede o status da máquina ("?") duas vezes por segundo
         poller.scheduleWithFixedDelay(() -> {
-            try { if (isConnected() && grbl) realtime((byte) '?'); } catch (Exception ignored) {}
+            try {
+                if (!isConnected()) return;
+                if (grbl) { realtime((byte) '?'); return; }
+                if (jobRunning || paused) return;
+                pollOk++;
+                write(((tick++ % 2 == 0) ? "M114\n" : "M105\n").getBytes(StandardCharsets.US_ASCII));
+            } catch (Exception ignored) {}
         }, 1, 500, TimeUnit.MILLISECONDS);
     }
 
@@ -86,8 +92,15 @@ public class SerialLink implements SerialInputOutputManager.Listener {
     public int getJobTotal() { return jobTotal; }
 
     private volatile Thread jobThread;
-    private volatile boolean grbl = true;
-    private volatile int rxLimit = 120;
+    private volatile boolean grbl = false;   // padrão: Marlin (impressora 3D K9)
+    private volatile int rxLimit = 0;
+    private volatile String temp = "";
+    private volatile int pollOk = 0;
+    private int tick = 0;
+    private static final java.util.regex.Pattern POS = java.util.regex.Pattern.compile("X:(-?[0-9.]+) Y:(-?[0-9.]+) Z:(-?[0-9.]+)");
+    private static final java.util.regex.Pattern TMP = java.util.regex.Pattern.compile("T:([0-9.]+) ?/([0-9.]+)");
+    public String getTemp() { return temp; }
+    public boolean isGrbl() { return grbl; }
 
     /** true = GRBL (buffer cheio, polling de status); false = outro firmware (linha a linha). */
     public void setGrbl(boolean g) { grbl = g; rxLimit = g ? 120 : 0; }
@@ -178,8 +191,19 @@ public class SerialLink implements SerialInputOutputManager.Listener {
 
     private void handle(String line) {
         if (line.startsWith("<")) { lastStatus = line; return; }
+        if (!grbl && !jobRunning) {
+            // respostas de M114 (posição) e M105 (temperatura): atualizam a tela sem poluir o console
+            java.util.regex.Matcher m = POS.matcher(line);
+            if (line.startsWith("X:") && m.find()) {
+                lastStatus = "<Idle|MPos:" + m.group(1) + "," + m.group(2) + "," + m.group(3) + ">";
+                return;
+            }
+            m = TMP.matcher(line);
+            if (line.startsWith("ok") && pollOk > 0 && m.find()) { pollOk--; temp = m.group(1) + " / " + m.group(2); return; }
+            if (line.equals("ok") && pollOk > 0) { pollOk--; return; }
+        }
         addLog(line);
-        if (line.startsWith("ALARM")) {
+        if (line.startsWith("ALARM") || line.startsWith("Error:")) {
             if (jobRunning) { abort = true; Thread t = jobThread; if (t != null) t.interrupt(); }
             return;
         }
@@ -198,6 +222,7 @@ public class SerialLink implements SerialInputOutputManager.Listener {
         }
         if (lines.isEmpty()) return "Arquivo vazio";
         acks.clear();
+        pollOk = 0;
         abort = false;
         paused = false;
         jobTotal = lines.size();
@@ -218,7 +243,7 @@ public class SerialLink implements SerialInputOutputManager.Listener {
                         used += n;
                         sent++;
                     }
-                    String r = acks.poll(120, TimeUnit.SECONDS);
+                    String r = acks.poll(grbl ? 120 : 600, TimeUnit.SECONDS);
                     if (r == null) { addLog("!! Timeout aguardando resposta da CNC"); break; }
                     if (!pending.isEmpty()) used -= pending.poll();
                     if (!r.startsWith("ok")) {
